@@ -1,0 +1,9 @@
+{
+    "name":"koolproxy",
+    "displayName":"KoolProxy",
+    "version":"0.0.1",
+    "tags":"工具,安全",
+    "description": "让上网更安全快捷",
+    "event_scripts":[],
+    "supports": ["orbi"]
+}
