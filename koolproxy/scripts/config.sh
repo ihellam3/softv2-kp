@@ -21,6 +21,8 @@ get)
     on_get
     ;;
 installed)
+    mkdir -p /koolshare/apps/koolproxy/bin
+    cp -rf $APP_ROOT/rdata/* $APP_ROOT/bin/
     ;;
 status)
     ;;
