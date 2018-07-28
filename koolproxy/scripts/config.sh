@@ -2,6 +2,7 @@
 
 . /koolshare/scripts/base.sh
 . /koolshare/scripts/jshn.sh
+. /koolshare/scripts/uci.sh
 LOCK_FILE=/var/lock/koolproxy.lock
 KP_DIR=$APP_ROOT/bin
 
@@ -15,9 +16,36 @@ unset_lock(){
     rm -rf "$LOCK_FILE"
 }
 
+load_uci_env(){
+    config_load koolproxy
+    config_get koolproxy_mode main mode
+}
+
+detect_cert(){
+    if [ ! -f $KP_DIR/data/private/ca.key.pem -o ! -f $KP_DIR/data/certs/ca.crt ]; then
+        cd $KP_DIR/data && sh gen_ca.sh
+    fi
+}
+
+write_user_txt(){
+    if [ -n "$koolproxy_custom_rule" ];then
+        echo $koolproxy_custom_rule| base64_decode |sed 's/\\n/\n/g' > $KP_DIR/data/rules/user.txt
+    fi
+}
+
+start_koolproxy(){
+    write_user_txt
+    cd $KP_DIR > /dev/null && ./koolproxy -d && cd - > /dev/null
+}
+
+stop_koolproxy(){
+    kill -9 `pidof koolproxy` >/dev/null 2>&1
+    killall koolproxy >/dev/null 2>&1
+}
+
 flush_nat(){
-    cd /tmp
-    iptables -t nat -S | grep -E "KOOLPROXY|KP_HTTP|KP_HTTPS|KP_ALL_PORT" | sed 's/-A/iptables -t nat -D/g'|sed 1,4d > clean.sh && chmod 777 clean.sh && ./clean.sh
+    cd /tmp > /dev/null
+    iptables -t nat -S | grep -E "KOOLPROXY|KP_HTTP|KP_HTTPS|KP_ALL_PORT" | sed 's/-A/iptables -t nat -D/g'|sed 1,4d > kp_clean.sh && chmod 777 kp_clean.sh && ./kp_clean.sh > /dev/null
     iptables -t nat -X KOOLPROXY > /dev/null 2>&1
     iptables -t nat -X KP_HTTP > /dev/null 2>&1
     iptables -t nat -X KP_HTTPS > /dev/null 2>&1
@@ -25,13 +53,14 @@ flush_nat(){
     ipset -F black_koolproxy > /dev/null 2>&1 && ipset -X black_koolproxy > /dev/null 2>&1
     ipset -F white_kp_list > /dev/null 2>&1 && ipset -X white_kp_list > /dev/null 2>&1
     ipset -F kp_full_port > /dev/null 2>&1 && ipset -X kp_full_port > /dev/null 2>&1
+    cd - > /dev/null
 }
 
 creat_ipset(){
     # Load ipset netfilter kernel modules and kernel modules
-    ipset -! create white_kp_list nethash
-    ipset -! create black_koolproxy iphash
-    cat $KP_DIR/data/rules/koolproxy.txt $KP_DIR/data/rules/daily.txt $KP_DIR/data/rules/user.txt | grep -Eo "(.\w+\:[1-9][0-9]{1,4})/" | grep -Eo "([0-9]{1,5})" | sort -un | sed -e '$a\80' -e '$a\443' | sed -e "s/^/-A kp_full_port &/g" -e "1 i\-N kp_full_port bitmap:port range 0-65535 " | ipset -R -!
+    ipset -! create white_kp_list nethash > /dev/null
+    ipset -! create black_koolproxy iphash > /dev/null
+    cat $KP_DIR/data/rules/koolproxy.txt $KP_DIR/data/rules/daily.txt $KP_DIR/data/rules/user.txt | grep -Eo "(.\w+\:[1-9][0-9]{1,4})/" | grep -Eo "([0-9]{1,5})" | sort -un | sed -e '$a\80' -e '$a\443' | sed -e "s/^/-A kp_full_port &/g" -e "1 i\-N kp_full_port bitmap:port range 0-65535 " | ipset -R -! > /dev/null
 }
 
 add_white_black_ip(){
@@ -57,6 +86,15 @@ EOT
 
 }
 
+
+remove_nat_start(){
+    uci -q batch <<-EOT
+delete firewall.ks_koolproxy
+commit firewall
+EOT
+
+}
+
 get_action_chain() {
     case "$1" in
         0)
@@ -70,7 +108,7 @@ get_action_chain() {
         ;;
         3)
             echo "KP_ALL_PORT"
-        ;;      
+        ;;
     esac
 }
 
@@ -106,22 +144,84 @@ load_nat(){
         PR_NU=1
     else
         let PR_NU+=1
-    fi  
+    fi
     [ "$koolproxy_mode" == "1" ] || [ "$koolproxy_mode" == "3" ] && iptables -t nat -I PREROUTING "$PR_NU" -p tcp -j KOOLPROXY
     # ipset 黑名单模式
     [ "$koolproxy_mode" == "2" ] && iptables -t nat -I PREROUTING "$PR_NU" -p tcp -m set --match-set black_koolproxy dst -j KOOLPROXY
 }
 
 on_post() {
-    echo '{"status":"ok"}'
+    local koolproxy_mode
+    local koolproxy_acl_default
+    json_load "$INPUT_JSON"
+    json_get_var koolproxy_mode "mode"
+    json_get_var koolproxy_acl_default "acl"
+    uci -q batch <<-EOT
+set koolproxy.main.mode=$koolproxy_mode
+set koolproxy.main.acl=$koolproxy_acl_default
+EOT
+
+    if [ "$koolproxy_mode" == "0" ]; then
+        # stop it
+        set_lock
+        remove_nat_start
+        flush_nat
+        stop_koolproxy
+        unset_lock
+
+        on_get
+    else
+        # restart it
+        remove_nat_start
+        flush_nat
+        stop_koolproxy
+        # now start
+        detect_cert
+        start_koolproxy
+        creat_ipset
+        add_white_black_ip
+        load_nat
+        write_nat_start
+
+        on_get
+    fi
 }
 
 on_get() {
-    echo '{"status":"ok"}'
+    local koolproxy_mode
+    local koolproxy_acl_default
+    config_load koolproxy
+    config_get koolproxy_mode main mode
+    config_get koolproxy_acl_default main acl
+
+    status=`pidof koolproxy`
+
+    echo '{"status":"'${status}'","mode":"'$koolproxy_mode'","acl":"'$koolproxy_acl_default'"}'
 }
 
 case $ACTION in
 start)
+    load_uci_env
+    set_lock
+    detect_cert
+    start_koolproxy
+    creat_ipset
+    add_white_black_ip
+    load_nat
+    write_nat_start
+    unset_lock
+    ;;
+restart)
+    load_uci_env
+    remove_nat_start
+    flush_nat
+    stop_koolproxy
+    # now start
+    detect_cert
+    start_koolproxy
+    creat_ipset
+    add_white_black_ip
+    load_nat
     write_nat_start
     ;;
 post)
@@ -131,14 +231,22 @@ get)
     on_get
     ;;
 installed)
+    app_init_cfg '{"koolproxy":[{"_id":"main","mode":"0","acl":"1"}]}'
     mkdir -p /koolshare/apps/koolproxy/bin
     cp -rf $APP_ROOT/rdata/* $APP_ROOT/bin/
     ;;
 status)
     ;;
 stop)
+    load_uci_env
+    set_lock
+    remove_nat_start
+    flush_nat
+    stop_koolproxy
+    unset_lock
     ;;
 *)
+    load_uci_env
     set_lock
     flush_nat
     creat_ipset

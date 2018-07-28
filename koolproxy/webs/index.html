@@ -7,8 +7,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
   <script type="text/javascript" src="https://unpkg.com/vue@2.2.1/dist/vue.min.js"></script>
-  <script type="text/javascript" src="https://unpkg.com/vue-form-generator@2.1.1"></script>
-  <link rel="stylesheet" type="text/css" href="https://unpkg.com/vue-form-generator@2.1.0/dist/vfg.css">
+  <script type="text/javascript" src="https://unpkg.com/vue-form-generator@2.2.2"></script>
+  <link rel="stylesheet" type="text/css" href="https://unpkg.com/vue-form-generator@2.2.2/dist/vfg.css">
   <title>KoolProxy</title>
 </head>
 
@@ -48,35 +48,39 @@
       data: function () {
         var self = this
         return {
-          model: {"region":"", "info":"配置变动，手动重启才生效", "wifi5g":"disabled", "ssid5g":""},
+          model: {"mode":"0", "acl":"HTTP", "status":"数据更新中"},
           schema: {
             fields: [{
                type: "select",
-               label: "区域",
-               model: "region",
+               label: "工作模式",
+               model: "mode",
                required: true,
-               values: ["NA","WW","GR","PR","RU","BZ","IN","KO","JP","AU","CA"]
-            }, {
-               type: "select",
-               label: "独立 5G 信号",
-               model: "wifi5g",
                values: function() {
                    return [
-                       {"id":"disabled", "name":"关闭"},
-                       {"id":"enabled", "name":"打开"}
+                       {"id":"0", "name":"关闭"},
+                       {"id":"1", "name":"全局模式"}
                    ]
                },
-            }, {
-                type: "input",
-                inputType: "text",
-                label: "SSID 5G",
-                model: "ssid5g",
-                maxlength: 50,
-                placeholder: "填入 SSID"
-            }, {
+               selectOptions: {
+                   hideNoneSelectedText: true
+               }
+            },{
+               type: "select",
+               label: "过滤方式",
+               model: "acl",
+               required: true,
+               values: function() {
+                   return [
+                       {"id":"1", "name":"HTTP"}
+                   ]
+               },
+               selectOptions: {
+                   hideNoneSelectedText: true
+               }
+            },{
               type: "label",
               label: "说明",
-              model: "info",
+              model: "status",
             }, {
               type: "submit",
               label: "",
@@ -84,19 +88,17 @@
               validateBeforeSubmit: true,
               onSubmit: function(mod, sch) {
                   var postData = {
-                     region: mod.region,
-                     wifi5g: mod.wifi5g,
-                     ssid5g: mod.ssid5g
+                     mode: mod.mode,
+                     acl: mod.acl
                   };
 
                   axios.post('/cgi-bin/luci/apps/koolproxy', postData).then(function(result) {
-                      if(result.data.status == "ok") {
-                          alert("配置成功，但是要重启才生效");
-                      }
+                      self.handleData(result.data, true);
                   });
 
                 }
-              }]
+              }],
+
           },
           formOptions: {
             validateAfterLoad: false,
@@ -106,25 +108,37 @@
       },
       mounted: function() {
         var self = this
+        var tm = function() {
+            axios.get("/cgi-bin/luci/apps/koolproxy").then(function(result) {
+              var data = result.data;
+              if (data.status == "") {
+                  data.status = "未运行";
+              } else {
+                  data.status = "运行中，pid=" + data.status;
+              }
+              self.model.status = data.status;
+            });
+        };
         axios.get("/cgi-bin/luci/apps/koolproxy").then(function(result) {
             self.handleData(result.data);
+            setTimeout(tm, 2000);
         });
       },
       methods: {
         handleData: function (data, is_post) {
-          var region = data.region || '';
-          data.info = "配置变动，手动重启才生效，建议选择 NA 区域";
-          var ss = region.split(":");
-          if (ss.length == 3) {
-              data.region = ss[2].trim();
+          if (data.status == "") {
+              data.status = "未运行";
           } else {
-              data.region = "";
+              data.status = "运行中，pid=" + data.status;
           }
           if (is_post) {
-            this.model.region = data.enabled;
+            this.model.mode = data.mode;
+            this.model.acl = data.acl;
+            this.model.status = data.status;
           } else {
             this.model = data;
           }
+
         }
       }
     });
