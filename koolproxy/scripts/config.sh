@@ -19,6 +19,7 @@ unset_lock(){
 load_uci_env(){
     config_load koolproxy
     config_get koolproxy_mode main mode
+    config_get koolproxy_acl_default main acl
 }
 
 detect_cert(){
@@ -201,14 +202,11 @@ on_get() {
 
 case $ACTION in
 start)
+    # boot it only, not include iptables
     load_uci_env
     set_lock
     detect_cert
     start_koolproxy
-    creat_ipset
-    add_white_black_ip
-    load_nat
-    write_nat_start
     unset_lock
     ;;
 restart)

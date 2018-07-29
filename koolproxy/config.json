@@ -1,9 +1,13 @@
 {
     "name":"koolproxy",
     "displayName":"KoolProxy",
-    "version":"0.0.1",
+    "version":"0.0.2",
     "tags":"工具,安全",
     "description": "让上网更安全快捷。http 支持了，https 还会远吗？",
-    "event_scripts":[{"installed":99}],
+    "event_scripts":[
+        {"installed":99},
+        {"start":99},
+        {"stop":99}
+    ],
     "supports": ["orbi"]
 }
